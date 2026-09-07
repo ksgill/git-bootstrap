@@ -1,0 +1,14 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell:
+    uses: ksgill/bash-includes/.github/workflows/shell-ci.yml@main
+    with:
+      # --help, not a real run: every other path installs packages, writes to
+      # ~/.ssh and calls sudo, none of which belongs on a CI runner.
+      smoke: ./dist/git-bootstrap.sh --help

@@ -17,12 +17,30 @@ set -euo pipefail
 #   GPG_PASSPHRASE   passphrase for the encrypted bundle; required with
 #                    --non-interactive, prompted for otherwise
 
-# ── Logging ──────────────────────────────────────────────────────────────────
+# ── Library ───────────────────────────────────────────────────────────────────
 
-log_info()  { printf '\e[32m[INFO]\e[0m  %s\n' "$*"; }
-log_warn()  { printf '\e[33m[WARN]\e[0m  %s\n' "$*" >&2; }
-log_error() { printf '\e[31m[ERROR]\e[0m %s\n' "$*" >&2; }
-die()       { log_error "$*"; exit 1; }
+# >>> bash-includes >>>
+# include: git.sh
+#
+# Development bootstrap. Lets this script run straight from a checkout;
+# ./build.sh replaces this whole block with the library inlined, so the shipped
+# artifact has no runtime dependency — which matters more here than anywhere
+# else, since this is what runs on a machine where nothing is set up yet.
+_bootstrap_lib() {
+    local d
+    for d in "${BASH_INCLUDES_DIR:-}" \
+             /opt/git/bash-includes/lib \
+             /usr/local/lib/bash-includes; do
+        [[ -n "$d" && -r "$d/log.sh" ]] || continue
+        # shellcheck source=/dev/null
+        . "$d/log.sh"; . "$d/journal.sh"; . "$d/backup.sh"; . "$d/git.sh"
+        return 0
+    done
+    printf 'ERROR: bash-includes not found. Set BASH_INCLUDES_DIR to its lib/ directory.\n' >&2
+    exit 1
+}
+_bootstrap_lib
+# <<< bash-includes <<<
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -46,26 +64,19 @@ ENCRYPTED_KEYS_NAME="keys.tar.gpg"
 SSH_DIR="${HOME}/.ssh"
 PRIVATE_KEY_DST="${SSH_DIR}/git@github.com"
 PUBLIC_KEY_DST="${SSH_DIR}/git@github.com.pub"
-SSH_CONFIG="${SSH_DIR}/config"
-KNOWN_HOSTS="${SSH_DIR}/known_hosts"
+# The ssh config path, the known_hosts path and the pinned host key all live in
+# lib/git.sh now, so a machine set up from this stick and one provisioned by
+# sys-bld end up with the same stanza and the same pin.
 
-# GitHub's Ed25519 host key, pinned so the FIRST connection is verified instead
-# of blindly trusted. Taken from https://api.github.com/meta (ssh_keys), which
-# is authenticated by TLS, and cross-checked against the fingerprint GitHub
-# publishes in its docs. Ed25519 only, per the keys policy — GitHub also serves
-# RSA and ECDSA host keys, which are deliberately not pinned here.
-#
-# If GitHub ever rotates this key, ssh will refuse to connect and say so
-# loudly; re-check https://api.github.com/meta and update both lines together.
-GITHUB_HOST_KEY="github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-GITHUB_HOST_FPR="SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
+# journal.sh defaults to /var/lib/provision, which needs root. This runs
+# unprivileged with per-command sudo, so it keeps a per-user record instead —
+# a log of what was changed in ~/.ssh on a machine that had nothing before.
+JOURNAL_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/git-bootstrap"
+JOURNAL_FILE="${JOURNAL_DIR}/changes.jsonl"
 
 # The user who invoked the script — used to set correct ownership after sudo cp.
 CURRENT_USER="$(id -un)"
 CURRENT_GROUP="$(id -gn)"
-
-# GitHub config block sentinel — used to detect if the block already exists.
-GH_HOST_BLOCK="Host github"
 
 # ── Flags ─────────────────────────────────────────────────────────────────────
 
@@ -105,7 +116,8 @@ Environment:
 What it does:
   installs git (and gnupg, only if the keys are encrypted); creates /opt/git
   owned by the invoking user; installs the keypair into ~/.ssh at 600/644;
-  appends a github block to ~/.ssh/config; pins GitHub's Ed25519 host key
+  writes ~/.ssh/config.d/10-github.conf and includes it from ~/.ssh/config;
+  pins GitHub's Ed25519 host key
   in ~/.ssh/known_hosts; sets git global config; verifies with ssh -T.
 
 Re-running is safe: the ssh config block and the host key pin are both skipped
@@ -326,38 +338,6 @@ install_keys() {
     log_info "Keys installed to ${SSH_DIR}"
 }
 
-# ── Write ~/.ssh/config block ─────────────────────────────────────────────────
-
-configure_ssh() {
-    if [[ -f "${SSH_CONFIG}" ]] && grep -qF "${GH_HOST_BLOCK}" "${SSH_CONFIG}"; then
-        log_info "GitHub SSH config block already present — skipping."
-        return
-    fi
-
-    log_info "Appending GitHub host block to ${SSH_CONFIG}"
-
-    # Append a blank line if the file already exists so the new block
-    # doesn't run into any existing content.
-    if [[ -f "${SSH_CONFIG}" ]]; then
-        printf '\n' >> "${SSH_CONFIG}"
-    fi
-
-    cat >> "${SSH_CONFIG}" <<'SSHEOF'
-Host github
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/git@github.com
-    IdentitiesOnly yes    # only offer this key; prevents other loaded keys from being tried first
-    AddKeysToAgent no     # do not auto-add this key to ssh-agent on first use
-    HostKeyAlgorithms ssh-ed25519   # only accept the host key type pinned in known_hosts
-SSHEOF
-
-    # 600: SSH will ignore config files with loose permissions.
-    chmod 600 "${SSH_CONFIG}"
-
-    log_info "GitHub SSH config block written."
-}
-
 # ── /opt/git directory setup ──────────────────────────────────────────────────
 
 setup_git_dir() {
@@ -373,37 +353,6 @@ setup_git_dir() {
     sudo chmod 774 /opt/git || die "Failed to set permissions on /opt/git"
 
     log_info "/opt/git owner=${CURRENT_USER} group=${CURRENT_GROUP} mode=774"
-}
-
-# ── Pin GitHub's host key ─────────────────────────────────────────────────────
-
-pin_host_key() {
-    if [[ -f "${KNOWN_HOSTS}" ]] && grep -qxF "${GITHUB_HOST_KEY}" "${KNOWN_HOSTS}"; then
-        log_info "GitHub host key already pinned — skipping."
-        return
-    fi
-
-    # Verify the constant before trusting it: a typo in the base64 would
-    # otherwise be pinned silently and only surface as a failed connection.
-    local fpr
-    fpr="$(printf '%s\n' "${GITHUB_HOST_KEY}" | ssh-keygen -lf - | awk '{print $2}')" \
-        || die "Could not parse the pinned host key."
-    [[ "${fpr}" == "${GITHUB_HOST_FPR}" ]] \
-        || die "Pinned key fingerprint mismatch: got ${fpr}, expected ${GITHUB_HOST_FPR}"
-
-    # Remove any existing github.com entry first. One acquired earlier by
-    # trust-on-first-use would conflict with the pin and make ssh report a
-    # changed host key.
-    if [[ -f "${KNOWN_HOSTS}" ]] && ssh-keygen -F github.com -f "${KNOWN_HOSTS}" >/dev/null 2>&1; then
-        log_warn "Replacing an existing github.com entry in ${KNOWN_HOSTS}"
-        ssh-keygen -R github.com -f "${KNOWN_HOSTS}" >/dev/null 2>&1 \
-            || die "Failed to remove the existing github.com entry."
-    fi
-
-    printf '%s\n' "${GITHUB_HOST_KEY}" >> "${KNOWN_HOSTS}"
-    chmod 644 "${KNOWN_HOSTS}"
-
-    log_info "Pinned GitHub host key ${GITHUB_HOST_FPR}"
 }
 
 # ── Git global config ─────────────────────────────────────────────────────────
@@ -431,8 +380,14 @@ configure_git() {
         git_email="${git_email:-${default_email}}"
     fi
 
-    git config --global user.name  "${git_user}"
-    git config --global user.email "${git_email}"
+    # Identity, the global ignore file and init.defaultBranch come from the
+    # library, so a machine set up from this stick matches one provisioned by
+    # sys-bld rather than differing in ways nobody would think to check.
+    git_identity_config "${git_user}" "${git_email}"
+
+    # Below here is git-bootstrap's own preference, deliberately not in the
+    # library: sys-bld does not set these, and they are a working style rather
+    # than something a machine needs to function.
 
     # Always recurse into submodules on clone, pull, fetch, and checkout.
     # Override per-repo with --no-recurse-submodules if needed.
@@ -445,8 +400,6 @@ configure_git() {
     # Requires git 2.38+. Ubuntu 24.04 ships 2.43.
     git config --global push.autoSetupRemote true
 
-    log_info "Git global config: user.name               = ${git_user}"
-    log_info "Git global config: user.email              = ${git_email}"
     log_info "Git global config: submodule.recurse       = true"
     log_info "Git global config: clone.recurseSubmodules = true"
     log_info "Git global config: push.default            = current"
@@ -460,7 +413,7 @@ verify_identity() {
     # ssh -T exits with code 1 even on success (GitHub sends a greeting, not a shell).
     # We capture stderr (where the greeting goes) and check its content.
     #
-    # StrictHostKeyChecking=yes, not accept-new: pin_host_key has already put the
+    # StrictHostKeyChecking=yes, not accept-new: the pin has already put the
     # real key in known_hosts, so there is no first-use window left to accept.
     # Anything presenting a different host key is refused rather than recorded.
     local output
@@ -481,6 +434,10 @@ verify_identity() {
 main() {
     log_info "=== git-bootstrap: starting ==="
 
+    # Records what gets changed under ~/.ssh. SCRIPT_VERSION is stamped by bld
+    # in the built artifact and unset when running straight from a checkout.
+    journal_init "git-bootstrap" "${SCRIPT_VERSION:-dev}"
+
     preflight
     ensure_git
     # Only needed for an encrypted bundle. Written as an if, not `[[ ]] && ...`,
@@ -491,8 +448,8 @@ main() {
     setup_git_dir
     setup_ssh_dir
     install_keys
-    configure_ssh
-    pin_host_key
+    git_github_ssh_stanza "${PRIVATE_KEY_DST}"
+    git_pin_github_host_key
     configure_git
     verify_identity
 

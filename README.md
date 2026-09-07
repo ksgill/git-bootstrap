@@ -16,8 +16,14 @@ while the key material stays on a USB stick in your pocket.
 ```sh
 git clone https://github.com/ksgill/git-bootstrap.git
 cd git-bootstrap
-./git-bootstrap.sh --keys-dir /run/media/"$USER"/MYSTICK/git-bootstrap
+./dist/git-bootstrap.sh --keys-dir /run/media/"$USER"/MYSTICK/git-bootstrap
 ```
+
+`dist/git-bootstrap.sh` is the thing you run. It is committed, self-contained,
+and needs nothing but a stock Ubuntu — which matters here more than in most
+repos, because this is what runs on a machine where nothing is set up yet. The
+top-level `git-bootstrap.sh` is the source, and it needs the `bash-includes`
+library; see [Building](#building).
 
 Or run it straight off the stick, with the keys beside it, which is what
 `--keys-dir` defaults to:
@@ -25,6 +31,9 @@ Or run it straight off the stick, with the keys beside it, which is what
 ```sh
 /run/media/"$USER"/MYSTICK/git-bootstrap/git-bootstrap.sh
 ```
+
+The copy on the stick is the built artifact under its plain name, so there is no
+`dist/` to remember when running it from there.
 
 Run it as your normal user. It calls `sudo` per command where it genuinely
 needs root — installing packages, creating `/opt/git` — and never expects to
@@ -44,9 +53,10 @@ In order:
 4. **Creates `~/.ssh`** at mode `700` if it does not exist. SSH refuses to use
    the directory otherwise.
 5. **Installs the keypair** into `~/.ssh`, private key `600`, public key `644`.
-6. **Appends a `github` host block** to `~/.ssh/config`, and
-   sets that file to `600` — SSH silently ignores a config file with looser
-   permissions.
+6. **Writes `~/.ssh/config.d/10-github.conf`** and prepends an `Include` for it
+   to `~/.ssh/config`, both at `600` — SSH silently ignores a config file with
+   looser permissions. A stanza appended to `~/.ssh/config` by an older version
+   is removed, so the host is defined in exactly one place.
 7. **Pins GitHub's Ed25519 host key** in `~/.ssh/known_hosts`.
 8. **Sets git's global configuration** — identity plus a handful of defaults.
 9. **Verifies** by running `ssh -T` against GitHub and checking the greeting.
@@ -146,13 +156,15 @@ at setup is cheaper than discovering that weeks later.
 | `~/.ssh` | `700` | Created if absent. |
 | `~/.ssh/git@github.com` | `600` | The private key. |
 | `~/.ssh/git@github.com.pub` | `644` | The public key. |
-| `~/.ssh/config` | `600` | Appends the GitHub block; existing content is preserved. |
+| `~/.ssh/config` | `600` | Gains an `Include` line, prepended. Existing content preserved. |
+| `~/.ssh/config.d/10-github.conf` | `600` | The GitHub stanza. Owned by the script and overwritten wholesale. |
 | `~/.ssh/known_hosts` | `644` | Appends GitHub's pinned Ed25519 key. |
 | `~/.gitconfig` | — | Via `git config --global`. |
 
-The SSH block it appends:
+The stanza it writes:
 
 ```
+# Managed by bash-includes (git.sh) — this file is overwritten.
 Host github
     HostName github.com
     User git
@@ -161,6 +173,13 @@ Host github
     AddKeysToAgent no
     HostKeyAlgorithms ssh-ed25519
 ```
+
+It lives in its own file rather than being appended, because an append cannot
+*update*: the usual grep-for-a-sentinel idiom skips on every machine that has
+already run, so changing a directive later would silently do nothing. Owning a
+whole file means the stanza is always exactly what the code says. The `Include`
+is prepended rather than appended because ssh takes the first value it obtains
+for most keywords.
 
 `IdentitiesOnly yes` stops SSH offering other loaded keys before this one, which
 matters if you have several and GitHub starts rejecting attempts before reaching
@@ -240,6 +259,26 @@ Safe. The script is idempotent in the places that matter:
 - The host key pin is skipped if the exact key is already in `known_hosts`.
 - Package installs are skipped if `dpkg` reports the package installed.
 - Overwriting an existing private key asks first, and aborts if you decline.
+
+## Building
+
+The shared parts — git identity, the ssh stanza, the host key pin — live in
+[bash-includes](https://github.com/ksgill/bash-includes), so that
+`git-bootstrap` and `sys-bld` cannot drift apart on them. The pinned host key in
+particular exists in one place, which matters because GitHub will eventually
+rotate it.
+
+`build.sh` inlines the library into `dist/git-bootstrap.sh`:
+
+```sh
+./build.sh                                   # clones the tag in LIB_VERSION
+BASH_INCLUDES_DIR=../bash-includes/lib ./build.sh   # or use a local checkout
+```
+
+Building needs the network and the library. Running the artifact needs neither.
+Commit the source and the rebuilt `dist/` as separate commits — the version
+stamp is taken from the working tree, so building with uncommitted changes
+marks the artifact `-dirty` and CI rejects it.
 
 ## Requirements
 
