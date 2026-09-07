@@ -1,0 +1,24 @@
+# Key material must never enter this repository.
+#
+# git-bootstrap reads the keypair from --keys-dir, so the keys belong on the
+# removable volume, not in a clone. These patterns are the second line of
+# defence for the case where one gets copied in here by mistake — the repo is
+# public, so a single careless `git add -A` would publish a private key.
+
+git@github.com
+git@github.com.pub
+
+# Anything else key-shaped, in case the naming convention ever changes.
+id_*
+*.pub
+*.key
+*.pem
+
+# Encrypted key bundles.
+*.gpg
+*.asc
+keys.tar*
+
+# Editor swap files: these hold file contents, including whatever was open.
+.*.sw?
+*~
