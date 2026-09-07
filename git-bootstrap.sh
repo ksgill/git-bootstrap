@@ -105,7 +105,7 @@ Environment:
 What it does:
   installs git (and gnupg, only if the keys are encrypted); creates /opt/git
   owned by the invoking user; installs the keypair into ~/.ssh at 600/644;
-  appends a github.com block to ~/.ssh/config; pins GitHub's Ed25519 host key
+  appends a github block to ~/.ssh/config; pins GitHub's Ed25519 host key
   in ~/.ssh/known_hosts; sets git global config; verifies with ssh -T.
 
 Re-running is safe: the ssh config block and the host key pin are both skipped
@@ -343,7 +343,7 @@ configure_ssh() {
     fi
 
     cat >> "${SSH_CONFIG}" <<'SSHEOF'
-Host github github.com
+Host github
     HostName github.com
     User git
     IdentityFile ~/.ssh/git@github.com
@@ -464,7 +464,7 @@ verify_identity() {
     # real key in known_hosts, so there is no first-use window left to accept.
     # Anything presenting a different host key is refused rather than recorded.
     local output
-    output="$(ssh -T -o StrictHostKeyChecking=yes git@github.com 2>&1 || true)"
+    output="$(ssh -T -o StrictHostKeyChecking=yes github 2>&1 || true)"
 
     if echo "${output}" | grep -q "successfully authenticated"; then
         log_info "Authentication confirmed: ${output}"
@@ -472,7 +472,7 @@ verify_identity() {
         log_warn "Unexpected response from GitHub:"
         log_warn "${output}"
         log_warn "This may be a key deployment issue or a network problem."
-        log_warn "Re-run manually: ssh -T git@github.com"
+        log_warn "Re-run manually: ssh -T github"
     fi
 }
 
@@ -497,7 +497,7 @@ main() {
     verify_identity
 
     log_info "=== git-bootstrap: complete ==="
-    log_info "You can now clone repos with: git clone git@github.com:<user>/<repo>.git"
+    log_info "You can now clone repos with: git clone github:<user>/<repo>"
 }
 
 main "$@"

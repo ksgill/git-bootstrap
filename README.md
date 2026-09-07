@@ -14,7 +14,7 @@ while the key material stays on a USB stick in your pocket.
 ## Quick start
 
 ```sh
-git clone git@github.com:ksgill/git-bootstrap.git
+git clone https://github.com/ksgill/git-bootstrap.git
 cd git-bootstrap
 ./git-bootstrap.sh --keys-dir /run/media/"$USER"/MYSTICK/git-bootstrap
 ```
@@ -44,7 +44,7 @@ In order:
 4. **Creates `~/.ssh`** at mode `700` if it does not exist. SSH refuses to use
    the directory otherwise.
 5. **Installs the keypair** into `~/.ssh`, private key `600`, public key `644`.
-6. **Appends a `github` / `github.com` host block** to `~/.ssh/config`, and
+6. **Appends a `github` host block** to `~/.ssh/config`, and
    sets that file to `600` — SSH silently ignores a config file with looser
    permissions.
 7. **Pins GitHub's Ed25519 host key** in `~/.ssh/known_hosts`.
@@ -153,7 +153,7 @@ at setup is cheaper than discovering that weeks later.
 The SSH block it appends:
 
 ```
-Host github github.com
+Host github
     HostName github.com
     User git
     IdentityFile ~/.ssh/git@github.com
@@ -167,19 +167,27 @@ matters if you have several and GitHub starts rejecting attempts before reaching
 the right key. `HostKeyAlgorithms ssh-ed25519` constrains the connection to the
 one host key type that is actually pinned below.
 
-The `Host` line carries two patterns, so both remote forms resolve to this same
-block:
+The block is keyed on the alias `github`, so remotes are written in the short
+form:
 
 ```sh
-git clone github:ksgill/some-repo                # short alias
-git clone git@github.com:ksgill/some-repo.git    # full URL
+git clone github:ksgill/some-repo
 ```
 
-Both are worth covering. SSH matches `Host` patterns against the literal string
-in the remote, not against whatever it resolves to, so a block naming only
-`github` leaves every `git@github.com:` URL falling through to the default
-identity list — along with the script's own `ssh -T git@github.com` check at the
-end, which would then fail on a machine where no default key exists.
+SSH matches `Host` patterns against the literal string in the remote, not
+against whatever it resolves to, so the alias is the interface: a full
+`git@github.com:owner/repo.git` URL does **not** match this block and falls
+through to the default identity list. Host key verification is unaffected —
+`known_hosts` is keyed on the resolved `HostName`, so the pin below still
+applies when you connect through the alias.
+
+That is a deliberate choice rather than an oversight. GitHub's web UI hands out
+full `git@github.com:` URLs, so if you prefer those to work too, add the second
+pattern:
+
+```
+Host github github.com
+```
 
 The git settings applied are `user.name`, `user.email`, `submodule.recurse`,
 `clone.recurseSubmodules`, `push.default current`, and
