@@ -154,6 +154,28 @@ confirm() {
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 
+# Is this key file present? Tries as the invoking user first. If the key
+# directory is readable and traversable by us, a plain test is authoritative and
+# sudo is never invoked — which is the normal case, and avoids demanding a
+# password merely to stat two files. sudo is only worth trying when the
+# directory itself cannot be traversed, e.g. a root-owned mount.
+#
+# The distinction matters: `sudo test -f` returns non-zero both when the file is
+# missing AND when sudo could not authenticate at all, so using it
+# unconditionally reports "no keys found" for what is really a sudo failure.
+key_file_exists() {
+    local f="$1"
+
+    [[ -f "$f" ]] && return 0
+
+    # We could look, and it is not there. Authoritative; do not escalate.
+    if [[ -r "${KEYS_DIR}" && -x "${KEYS_DIR}" ]]; then
+        return 1
+    fi
+
+    sudo test -f "$f"
+}
+
 preflight() {
     log_info "Script directory: ${SCRIPT_DIR}"
     log_info "Key directory:    ${KEYS_DIR}"
@@ -161,16 +183,24 @@ preflight() {
 
     [[ -d "${KEYS_DIR}" ]] || die "Key directory does not exist: ${KEYS_DIR}"
 
+    # If the directory cannot be traversed as this user, every test below has to
+    # go through sudo, and a sudo that cannot authenticate would make missing
+    # keys and an unusable sudo look identical. Establish which it is up front.
+    if [[ ! -r "${KEYS_DIR}" || ! -x "${KEYS_DIR}" ]]; then
+        log_warn "${KEYS_DIR} is not readable as ${CURRENT_USER}; falling back to sudo."
+        sudo test -d "${KEYS_DIR}" \
+            || die "Cannot read ${KEYS_DIR}, and sudo is not usable here. Check the path, the mount, and whether this shell has a terminal for sudo to prompt on."
+    fi
+
     # Decide how the keys are supplied. A plaintext pair wins if present; the
-    # encrypted bundle is the fallback. sudo, because the files may be
-    # root-owned on the removable volume.
-    if sudo test -f "${PRIVATE_KEY_SRC}" && sudo test -f "${PUBLIC_KEY_SRC}"; then
+    # encrypted bundle is the fallback.
+    if key_file_exists "${PRIVATE_KEY_SRC}" && key_file_exists "${PUBLIC_KEY_SRC}"; then
         KEY_SOURCE_MODE="plain"
         log_info "Found an unencrypted keypair in ${KEYS_DIR}"
-        if sudo test -f "${ENCRYPTED_KEYS_SRC}"; then
+        if key_file_exists "${ENCRYPTED_KEYS_SRC}"; then
             log_warn "${ENCRYPTED_KEYS_NAME} is also present — using the plaintext pair."
         fi
-    elif sudo test -f "${ENCRYPTED_KEYS_SRC}"; then
+    elif key_file_exists "${ENCRYPTED_KEYS_SRC}"; then
         KEY_SOURCE_MODE="gpg"
         log_info "Found an encrypted bundle: ${ENCRYPTED_KEYS_SRC}"
     else

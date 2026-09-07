@@ -238,7 +238,9 @@ Safe. The script is idempotent in the places that matter:
 - Ubuntu or Debian, or anything else with `apt-get` and `dpkg`.
 - `bash`, `tar`, `ssh`, `ssh-keygen` — all present on a stock install.
 - `sudo` rights for the invoking user. Passwordless sudo is not required; the
-  script prompts per command as normal.
+  script prompts per command as normal. It is used only to install packages and
+  to create `/opt/git` — locating and reading the keys needs no elevation when
+  the key directory is readable by you, which is the normal case.
 - `gnupg`, installed automatically, and only when the keys are encrypted.
 
 ## Keys and this repository
