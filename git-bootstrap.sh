@@ -313,7 +313,7 @@ configure_ssh() {
     fi
 
     cat >> "${SSH_CONFIG}" <<'SSHEOF'
-Host github
+Host github github.com
     HostName github.com
     User git
     IdentityFile ~/.ssh/git@github.com

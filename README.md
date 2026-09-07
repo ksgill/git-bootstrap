@@ -44,8 +44,9 @@ In order:
 4. **Creates `~/.ssh`** at mode `700` if it does not exist. SSH refuses to use
    the directory otherwise.
 5. **Installs the keypair** into `~/.ssh`, private key `600`, public key `644`.
-6. **Appends a `github` host block** to `~/.ssh/config`, and sets that file to
-   `600` — SSH silently ignores a config file with looser permissions.
+6. **Appends a `github` / `github.com` host block** to `~/.ssh/config`, and
+   sets that file to `600` — SSH silently ignores a config file with looser
+   permissions.
 7. **Pins GitHub's Ed25519 host key** in `~/.ssh/known_hosts`.
 8. **Sets git's global configuration** — identity plus a handful of defaults.
 9. **Verifies** by running `ssh -T` against GitHub and checking the greeting.
@@ -145,14 +146,14 @@ at setup is cheaper than discovering that weeks later.
 | `~/.ssh` | `700` | Created if absent. |
 | `~/.ssh/git@github.com` | `600` | The private key. |
 | `~/.ssh/git@github.com.pub` | `644` | The public key. |
-| `~/.ssh/config` | `600` | Appends a `github` block; existing content is preserved. |
+| `~/.ssh/config` | `600` | Appends the GitHub block; existing content is preserved. |
 | `~/.ssh/known_hosts` | `644` | Appends GitHub's pinned Ed25519 key. |
 | `~/.gitconfig` | — | Via `git config --global`. |
 
 The SSH block it appends:
 
 ```
-Host github
+Host github github.com
     HostName github.com
     User git
     IdentityFile ~/.ssh/git@github.com
@@ -166,12 +167,19 @@ matters if you have several and GitHub starts rejecting attempts before reaching
 the right key. `HostKeyAlgorithms ssh-ed25519` constrains the connection to the
 one host key type that is actually pinned below.
 
-Because the block is keyed on the alias `github`, remotes are written as
-`github:owner/repo`:
+The `Host` line carries two patterns, so both remote forms resolve to this same
+block:
 
 ```sh
-git clone github:ksgill/some-repo
+git clone github:ksgill/some-repo                # short alias
+git clone git@github.com:ksgill/some-repo.git    # full URL
 ```
+
+Both are worth covering. SSH matches `Host` patterns against the literal string
+in the remote, not against whatever it resolves to, so a block naming only
+`github` leaves every `git@github.com:` URL falling through to the default
+identity list — along with the script's own `ssh -T git@github.com` check at the
+end, which would then fail on a machine where no default key exists.
 
 The git settings applied are `user.name`, `user.email`, `submodule.recurse`,
 `clone.recurseSubmodules`, `push.default current`, and
