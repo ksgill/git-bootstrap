@@ -36,8 +36,11 @@ The copy on the stick is the built artifact under its plain name, so there is no
 `dist/` to remember when running it from there.
 
 Run it as your normal user. It calls `sudo` per command where it genuinely
-needs root — installing packages, creating `/opt/git` — and never expects to
-be run as root itself.
+needs root — installing packages, creating `/opt/git` — and refuses to start
+if run as root itself, before it changes anything: as root, `/opt/git` and the
+keys would be set up for root rather than for you. If sudo needs your
+password, it asks once, up front, rather than partway through. `--help` works
+as any user.
 
 ## What it does
 

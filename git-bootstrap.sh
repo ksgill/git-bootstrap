@@ -20,6 +20,7 @@ set -euo pipefail
 # ── Library ───────────────────────────────────────────────────────────────────
 
 # >>> bash-includes >>>
+# include: privilege.sh
 # include: git.sh
 #
 # Development bootstrap. Lets this script run straight from a checkout;
@@ -33,7 +34,8 @@ _bootstrap_lib() {
              /usr/local/lib/bash-includes; do
         [[ -n "$d" && -r "$d/log.sh" ]] || continue
         # shellcheck source=/dev/null
-        . "$d/log.sh"; . "$d/journal.sh"; . "$d/backup.sh"; . "$d/git.sh"
+        . "$d/log.sh"; . "$d/privilege.sh"; . "$d/journal.sh"; . "$d/backup.sh"
+        . "$d/git.sh"
         return 0
     done
     printf 'ERROR: bash-includes not found. Set BASH_INCLUDES_DIR to its lib/ directory.\n' >&2
@@ -432,6 +434,15 @@ verify_identity() {
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 main() {
+    # First, before anything is written. Run as root, CURRENT_USER is root, so
+    # /opt/git would be chowned to root, and the keys, ssh config and git
+    # identity would go to root's HOME — or, where HOME is preserved, into the
+    # user's ~/.ssh owned by root. Either way the run can finish while setting
+    # up the wrong account. If sudo needs a password, it is asked for here
+    # rather than at the first sudo call partway through. --help and argument
+    # errors have already exited above, so they still work as any user.
+    require_unprivileged
+
     log_info "=== git-bootstrap: starting ==="
 
     # Records what gets changed under ~/.ssh. SCRIPT_VERSION is stamped by bld
