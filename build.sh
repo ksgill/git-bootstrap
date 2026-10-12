@@ -24,4 +24,5 @@ if [[ -z "$LIB" ]]; then
     LIB="$tmp/bash-includes/lib"
 fi
 
-exec "${LIB}/../bin/bld" -L "$LIB" -o dist git-bootstrap.sh
+# Not exec: the EXIT trap has to survive to remove the clone.
+"${LIB}/../bin/bld" -L "$LIB" -o dist git-bootstrap.sh
