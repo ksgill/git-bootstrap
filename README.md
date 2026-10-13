@@ -51,7 +51,7 @@ In order:
    encrypted bundle.
 2. **Installs `git`** if `dpkg` does not already report it installed. Installs
    `gnupg` too, but only when the keys are encrypted and it is actually needed.
-3. **Creates `/opt/git`**, chowns it to the invoking user and sets mode `774`.
+3. **Creates `/opt/git`**, chowns it to the invoking user and sets mode `755`.
    This is where project repositories are expected to live.
 4. **Creates `~/.ssh`** at mode `700` if it does not exist. SSH refuses to use
    the directory otherwise.
@@ -155,7 +155,7 @@ at setup is cheaper than discovering that weeks later.
 
 | Path | Mode | Notes |
 |---|---|---|
-| `/opt/git` | `774` | Created if absent; chowned to the invoking user. |
+| `/opt/git` | `755` | Created if absent; chowned to the invoking user. |
 | `~/.ssh` | `700` | Created if absent. |
 | `~/.ssh/git@github.com` | `600` | The private key. |
 | `~/.ssh/git@github.com.pub` | `644` | The public key. |

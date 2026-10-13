@@ -351,10 +351,11 @@ setup_git_dir() {
     fi
 
     sudo chown "${CURRENT_USER}:${CURRENT_GROUP}" /opt/git || die "Failed to set ownership on /opt/git"
-    # 774: owner and group have full access, others can read and traverse.
-    sudo chmod 774 /opt/git || die "Failed to set permissions on /opt/git"
+    # 755: the owner writes; group and others can list and traverse. sys-bld
+    # sets the same mode, so the two agree whichever runs last.
+    sudo chmod 755 /opt/git || die "Failed to set permissions on /opt/git"
 
-    log_info "/opt/git owner=${CURRENT_USER} group=${CURRENT_GROUP} mode=774"
+    log_info "/opt/git owner=${CURRENT_USER} group=${CURRENT_GROUP} mode=755"
 }
 
 # ── Git global config ─────────────────────────────────────────────────────────
