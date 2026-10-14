@@ -14,6 +14,12 @@ id_*
 *.key
 *.pem
 
+# Secret files, the shape every repository here ignores (CLAUDE-practices §2).
+# Nothing in git-bootstrap reads one; this is the same second line of defence.
+*.secret
+*.secrets
+secrets/
+
 # Encrypted key bundles.
 *.gpg
 *.asc
