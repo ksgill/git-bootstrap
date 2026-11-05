@@ -262,6 +262,9 @@ Safe. The script is idempotent in the places that matter:
 - The host key pin is skipped if the exact key is already in `known_hosts`.
 - Package installs are skipped if `dpkg` reports the package installed.
 - Overwriting an existing private key asks first, and aborts if you decline.
+  Both questions need a terminal: when stdin is not one, or ends before an
+  answer, the run aborts rather than assuming yes. `--non-interactive` answers
+  yes and logs the answer as assumed.
 
 ## Building
 

@@ -22,6 +22,7 @@ set -euo pipefail
 # >>> bash-includes >>>
 # include: privilege.sh
 # include: git.sh
+# include: prompt.sh
 #
 # Development bootstrap. Lets this script run straight from a checkout;
 # ./build.sh replaces this whole block with the library inlined, so the shipped
@@ -35,7 +36,7 @@ _bootstrap_lib() {
         [[ -n "$d" && -r "$d/log.sh" ]] || continue
         # shellcheck source=/dev/null
         . "$d/log.sh"; . "$d/privilege.sh"; . "$d/journal.sh"; . "$d/backup.sh"
-        . "$d/git.sh"
+        . "$d/git.sh"; . "$d/prompt.sh"
         return 0
     done
     printf 'ERROR: bash-includes not found. Set BASH_INCLUDES_DIR to its lib/ directory.\n' >&2
@@ -128,6 +129,7 @@ USAGE
 }
 
 NON_INTERACTIVE=false
+CONFIRM_ASSUME=""
 KEYS_DIR=""
 
 # Set by preflight to "plain" or "gpg" once it has seen what is actually there.
@@ -135,7 +137,7 @@ KEY_SOURCE_MODE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --non-interactive) NON_INTERACTIVE=true; shift ;;
+        --non-interactive) NON_INTERACTIVE=true; CONFIRM_ASSUME=yes; shift ;;
         --keys-dir)
             [[ $# -ge 2 ]] || die "--keys-dir requires a directory argument."
             KEYS_DIR="$2"; shift 2 ;;
@@ -152,19 +154,6 @@ KEYS_DIR="${KEYS_DIR:-${SCRIPT_DIR}}"
 PRIVATE_KEY_SRC="${KEYS_DIR}/${PRIVATE_KEY_NAME}"
 PUBLIC_KEY_SRC="${KEYS_DIR}/${PUBLIC_KEY_NAME}"
 ENCRYPTED_KEYS_SRC="${KEYS_DIR}/${ENCRYPTED_KEYS_NAME}"
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-confirm() {
-    if [[ "${NON_INTERACTIVE}" == true ]]; then
-        return 0
-    fi
-    local prompt="$1"
-    local reply
-    read -r -p "${prompt} [Y/n] " reply
-    # Empty reply (just Enter) defaults to yes
-    [[ -z "${reply}" || "${reply,,}" == "y" ]]
-}
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 
@@ -193,7 +182,8 @@ key_file_exists() {
 preflight() {
     log_info "Script directory: ${SCRIPT_DIR}"
     log_info "Key directory:    ${KEYS_DIR}"
-    confirm "Is this the correct key path?" || die "Aborted by user."
+    confirm --default yes --assume "${CONFIRM_ASSUME}" "Is this the correct key path?" \
+        || die "Aborted by user."
 
     [[ -d "${KEYS_DIR}" ]] || die "Key directory does not exist: ${KEYS_DIR}"
 
@@ -323,7 +313,8 @@ install_keys_gpg() {
 install_keys() {
     if [[ -f "${PRIVATE_KEY_DST}" ]]; then
         log_warn "Private key already exists at ${PRIVATE_KEY_DST}"
-        confirm "Overwrite?" || die "Aborted — existing key preserved."
+        confirm --default yes --assume "${CONFIRM_ASSUME}" "Overwrite?" \
+            || die "Aborted — existing key preserved."
     fi
 
     case "${KEY_SOURCE_MODE}" in
