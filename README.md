@@ -56,6 +56,9 @@ In order:
 4. **Creates `~/.ssh`** at mode `700` if it does not exist. SSH refuses to use
    the directory otherwise.
 5. **Installs the keypair** into `~/.ssh`, private key `600`, public key `644`.
+   A pair already there and identical to the source is left alone. A different
+   one is replaced only if you answer yes to a prompt whose default is no;
+   `--non-interactive` never replaces one and aborts instead.
 6. **Writes `~/.ssh/config.d/10-github.conf`** and prepends an `Include` for it
    to `~/.ssh/config`, both at `600` — SSH silently ignores a config file with
    looser permissions. A stanza appended to `~/.ssh/config` by an older version
@@ -132,7 +135,7 @@ left behind in `~/.ssh`.
 | Option | Meaning |
 |---|---|
 | `--keys-dir DIR` | Where to read the keypair from. Defaults to the directory holding the script. |
-| `--non-interactive` | Never prompt. See the environment variables below. |
+| `--non-interactive` | Never prompt. See the environment variables below. Never replaces an existing, different key: that run aborts with the key preserved. |
 | `-h`, `--help` | Usage summary. |
 
 ## Environment
@@ -162,7 +165,11 @@ at setup is cheaper than discovering that weeks later.
 | `~/.ssh/config` | `600` | Gains an `Include` line, prepended. Existing content preserved. |
 | `~/.ssh/config.d/10-github.conf` | `600` | The GitHub stanza. Owned by the script and overwritten wholesale. |
 | `~/.ssh/known_hosts` | `644` | Appends GitHub's pinned Ed25519 key. |
-| `~/.gitconfig` | — | Via `git config --global`. |
+| `~/.gitconfig` | — | Via `git config --global`: identity, `core.excludesFile`, `init.defaultBranch`, the submodule and push settings below. |
+| `~/.config/git/ignore` | `644` | The global gitignore, created with one comment line if absent; an existing file is left alone (`$XDG_CONFIG_HOME` honoured). |
+| `~/.ssh/config.orig`, `~/.ssh/config.bak` | as the original | Backups taken before `~/.ssh/config` is changed: `.orig` once, the first time; `.bak` the state before the latest change. |
+| `~/.local/state/git-bootstrap/changes.jsonl` | `644` | The journal: one line per file created or modified, with a timestamp (`$XDG_STATE_HOME` honoured). |
+| `/opt/git` | `755` | Listed above; repeated here because it is the one path outside `$HOME`. |
 
 The stanza it writes:
 
@@ -261,10 +268,15 @@ Safe. The script is idempotent in the places that matter:
 - The SSH config block is skipped if one is already present.
 - The host key pin is skipped if the exact key is already in `known_hosts`.
 - Package installs are skipped if `dpkg` reports the package installed.
-- Overwriting an existing private key asks first, and aborts if you decline.
-  Both questions need a terminal: when stdin is not one, or ends before an
-  answer, the run aborts rather than assuming yes. `--non-interactive` answers
-  yes and logs the answer as assumed.
+- A keypair already in `~/.ssh` and identical to the source is left alone,
+  with no prompt.
+- A different existing private key is replaced only if you answer yes to
+  `Overwrite? [y/N]`; the default, and the answer when stdin is not a terminal
+  or ends first, is no, and the run aborts with the key preserved.
+  `--non-interactive` answers yes to the key-path confirmation only; it never
+  replaces a key, and aborts naming the file to remove if one is in the way.
+  An encrypted bundle cannot be compared without decrypting it, so with
+  `keys.tar.gpg` an existing key always reaches the prompt.
 
 ## Building
 
@@ -321,3 +333,72 @@ This repository is public. Treat the second layer as insurance, not permission.
 ## Licence
 
 None specified.
+
+## Removal
+
+Everything the script puts on a machine is listed under "What it writes"; this
+undoes it. Each step is independent, so skip the ones whose result you want to
+keep (most people keep the key and `/opt/git`).
+
+1. Remove the GitHub ssh stanza, then the include that loads `config.d` — but
+   only if nothing else is left in that directory, which `rmdir` enforces.
+   The include is the first line of `~/.ssh/config`; the `.orig` backup is the
+   file as it was before the first run, if you would rather restore that.
+   `--follow-symlinks` keeps a symlinked config (a dotfiles checkout) a
+   symlink.
+
+   ```sh
+   rm -f ~/.ssh/config.d/10-github.conf
+   rmdir ~/.ssh/config.d && sed -i --follow-symlinks '\#^Include ~/.ssh/config.d/\*.conf$#d' ~/.ssh/config
+   ```
+
+2. Remove the pinned GitHub host key.
+
+   ```sh
+   ssh-keygen -R github.com -f ~/.ssh/known_hosts
+   ```
+
+3. Remove the keypair. This is the credential itself; make sure another copy
+   exists before you do.
+
+   ```sh
+   rm -f ~/.ssh/git@github.com ~/.ssh/git@github.com.pub
+   ```
+
+4. Remove the git settings it made. The identity and the global ignore are
+   shared with sys-bld, so leave them if sys-bld provisioned this machine.
+   Each `--unset` exits 5 if the key is already absent; that is not an error.
+
+   ```sh
+   git config --global --unset submodule.recurse
+   git config --global --unset clone.recurseSubmodules
+   git config --global --unset push.default
+   git config --global --unset push.autoSetupRemote
+   git config --global --unset user.name
+   git config --global --unset user.email
+   git config --global --unset core.excludesFile
+   git config --global --unset init.defaultBranch
+   ```
+
+   The global ignore file was created only if you had none: delete it only if
+   the journal says so (`grep 'created empty global gitignore'
+   ~/.local/state/git-bootstrap/changes.jsonl`), or it holds nothing but the
+   managed comment line.
+
+   ```sh
+   rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
+   ```
+
+5. Remove the backups and the journal.
+
+   ```sh
+   rm -f ~/.ssh/config.orig ~/.ssh/config.bak
+   rm -rf ~/.local/state/git-bootstrap
+   ```
+
+6. Remove `/opt/git`. `rmdir` refuses while anything is still cloned under
+   it, which is the point: remove the clones yourself, one by one, first.
+
+   ```sh
+   sudo rmdir /opt/git
+   ```

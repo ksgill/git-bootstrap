@@ -14,6 +14,8 @@
 # got as far as changing the system. HOME and XDG_STATE_HOME point into a temp
 # tree, so ~/.ssh and the journal are observable and the real ones untouched.
 
+bats_require_minimum_version 1.5.0
+
 setup_file() {
     if [[ -n "${BASH_INCLUDES_DIR:-}" ]]; then
         export GB_LIB="$BASH_INCLUDES_DIR"
@@ -29,6 +31,7 @@ setup() {
     REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
     SCRIPT="${REPO}/git-bootstrap.sh"
     TMP="$(mktemp -d)"
+    export TMP
     STUBS="${TMP}/bin"
     mkdir -p "$STUBS" "${TMP}/home" "${TMP}/keys"
 
@@ -45,10 +48,20 @@ setup() {
     printf 'not a real key\n' > "${TMP}/keys/git@github.com.pub"
 
     # sudo: record, run nothing, succeed. SUDO_FAIL makes it refuse instead.
+    # cp, chown and cmp are run for real when every path they name is inside
+    # $TMP, so the key-install tests can see what lands in ~/.ssh.
     cat > "${STUBS}/sudo" <<'STUB'
 #!/usr/bin/env bash
 printf 'sudo %s\n' "$*" >> "${SUDO_LOG}"
-[[ -z "${SUDO_FAIL:-}" ]]
+[[ -z "${SUDO_FAIL:-}" ]] || exit 1
+case "${1:-}" in
+    cp|chown|cmp)
+        for a in "$@"; do
+            [[ "$a" != /* || "$a" == "${TMP}"/* ]] || exit 0
+        done
+        exec "$@" ;;
+esac
+exit 0
 STUB
     # apt-get: must never be reached in these tests.
     cat > "${STUBS}/apt-get" <<'STUB'
@@ -129,4 +142,77 @@ _assert_untouched() {
     [ ! -e "${TMP}/state" ]
     # Only the guard's probe and its prime, nothing that changes state.
     [ "$(cat "$SUDO_LOG")" = $'sudo -n true\nsudo -v' ]
+}
+
+# ── install_keys: an existing key ────────────────────────────────────────────
+# Replacing a key is destructive: the prompt defaults to no, --non-interactive
+# never answers it, and a pair identical to the source is not asked about.
+# ssh is stubbed here because the run gets as far as verify_identity.
+
+_stub_ssh() {
+    cat > "${STUBS}/ssh" <<'STUB'
+#!/usr/bin/env bash
+printf 'Hi stub! You'"'"'ve successfully authenticated, but GitHub does not provide shell access.\n' >&2
+exit 1
+STUB
+    chmod +x "${STUBS}/ssh"
+}
+
+@test "an identical keypair already in ~/.ssh is left alone without a prompt" {
+    _stub_ssh
+    mkdir -m 700 "${TMP}/home/.ssh"
+    cp "${TMP}/keys/git@github.com" "${TMP}/keys/git@github.com.pub" "${TMP}/home/.ssh/"
+    run "$SCRIPT" --keys-dir "${TMP}/keys" --non-interactive </dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already match the source"* ]]
+    [[ "$output" != *"Overwrite?"* ]]
+    run ! grep -q '^sudo cp ' "$SUDO_LOG"
+    [ "$(cat "${TMP}/home/.ssh/git@github.com")" = "not a real key" ]
+    [ "$(stat -c '%a' "${TMP}/home/.ssh/git@github.com")" = 600 ]
+}
+
+@test "--non-interactive never replaces a different existing key" {
+    _stub_ssh
+    mkdir -m 700 "${TMP}/home/.ssh"
+    printf 'the old key\n' > "${TMP}/home/.ssh/git@github.com"
+    run "$SCRIPT" --keys-dir "${TMP}/keys" --non-interactive </dev/null
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"differs from the source"* ]]
+    [[ "$output" == *"--non-interactive never overwrites an existing key"* ]]
+    [[ "$output" != *"Overwrite?"* ]]
+    run ! grep -q '^sudo cp ' "$SUDO_LOG"
+    [ "$(cat "${TMP}/home/.ssh/git@github.com")" = "the old key" ]
+}
+
+@test "interactively, Overwrite? defaults to no: an empty answer keeps the existing key" {
+    command -v script >/dev/null || skip "util-linux script(1) is not available"
+    _stub_ssh
+    mkdir -m 700 "${TMP}/home/.ssh"
+    printf 'the old key\n' > "${TMP}/home/.ssh/git@github.com"
+    # confirm reads only from a terminal, so the run gets a pty from script(1)
+    # and its answers through it: an empty line for the key path (default
+    # yes), then an empty line for Overwrite? (default no). Each answer is
+    # sent after a pause, because confirm drains typeahead before it asks.
+    run timeout 60 bash -c "{ sleep 2; printf '\\n'; sleep 2; printf '\\n'; sleep 2; } | NO_COLOR=1 script -qefc '$SCRIPT --keys-dir ${TMP}/keys' /dev/null"
+    [[ "$output" == *"Overwrite? [y/N]"* ]]
+    [[ "$output" == *"Aborted — existing key preserved."* ]]
+    run ! grep -q '^sudo cp ' "$SUDO_LOG"
+    [ "$(cat "${TMP}/home/.ssh/git@github.com")" = "the old key" ]
+}
+
+@test "interactively, answering y to Overwrite? installs the new key" {
+    command -v script >/dev/null || skip "util-linux script(1) is not available"
+    _stub_ssh
+    mkdir -m 700 "${TMP}/home/.ssh"
+    printf 'the old key\n' > "${TMP}/home/.ssh/git@github.com"
+    # Key path (default yes), Overwrite? (y), then the git name and email
+    # prompts take their defaults from the environment.
+    run timeout 60 bash -c "{ sleep 2; printf '\\n'; sleep 2; printf 'y\\n'; sleep 2; printf '\\n'; sleep 1; printf '\\n'; sleep 2; } | NO_COLOR=1 script -qefc '$SCRIPT --keys-dir ${TMP}/keys' /dev/null"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Overwrite? [y/N]"* ]]
+    [[ "$output" == *"Keys installed to"* ]]
+    grep -q '^sudo cp ' "$SUDO_LOG"
+    [ "$(cat "${TMP}/home/.ssh/git@github.com")" = "not a real key" ]
+    [ "$(stat -c '%a' "${TMP}/home/.ssh/git@github.com")" = 600 ]
+    [ "$(stat -c '%a' "${TMP}/home/.ssh/git@github.com.pub")" = 644 ]
 }
